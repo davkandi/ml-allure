@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { orders, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRoles, createAuthErrorResponse } from '@/lib/auth';
+import { logPaymentEvent, logError } from '@/lib/logger';
 
 /**
  * Mock payment verification
@@ -140,6 +141,16 @@ export async function POST(request: NextRequest) {
       })
       .where(eq(orders.id, txn.orderId));
 
+    // Log payment verification event
+    logPaymentEvent({
+      type: verificationResult.status === 'SUCCESS' ? 'PAYMENT_VERIFIED' : 'PAYMENT_FAILED',
+      orderId: txn.orderId,
+      amount: txn.amount,
+      provider: txn.provider,
+      reference,
+      userId: authenticatedUser.id,
+    });
+
     return NextResponse.json({
       success: true,
       message: 'Payment verification completed',
@@ -154,7 +165,10 @@ export async function POST(request: NextRequest) {
       }
     });
   } catch (error) {
-    console.error('Payment verification error:', error);
+    logError(error as Error, {
+      operation: 'payment_verification',
+      userId: authenticatedUser?.id,
+    });
     return NextResponse.json(
       {
         success: false,
