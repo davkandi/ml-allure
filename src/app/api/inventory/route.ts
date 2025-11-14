@@ -2,8 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { productVariants, products, categories } from "@/db/schema";
 import { eq, like, or, sql } from "drizzle-orm";
+import { requireRoles, createAuthErrorResponse } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
+  // SECURITY FIX: Require authentication for inventory access
+  const authCheck = requireRoles(request, ['ADMIN', 'INVENTORY_MANAGER', 'STAFF', 'SALES_STAFF']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Unauthorized access to inventory',
+      authCheck.error?.includes('permissions') ? 403 : 401
+    );
+  }
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const category = searchParams.get("category");
