@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { requireRoles, createAuthErrorResponse } from '@/lib/auth';
+import { logPaymentEvent, logError } from '@/lib/logger';
 
 /**
  * Mock payment verification
@@ -40,6 +42,18 @@ function getStatusMessage(status: string): string {
  * Verify a mobile money payment (Admin only)
  */
 export async function POST(request: NextRequest) {
+  // SECURITY FIX: Only ADMIN and STAFF can verify payments
+  const authCheck = requireRoles(request, ['ADMIN', 'STAFF', 'SALES_STAFF']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only administrators and staff can verify payments',
+      403
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+
   try {
     const body = await request.json();
     const { transactionId, reference } = body;
@@ -112,7 +126,7 @@ export async function POST(request: NextRequest) {
       .set({
         status: transactionStatus,
         verifiedAt: verificationResult.status === 'SUCCESS' ? now : null,
-        // verifiedBy: req.user?.id, // TODO: Get from session
+        verifiedBy: authenticatedUser.id, // SECURITY FIX: Use authenticated user ID
         updatedAt: now
       })
       .where(eq(transactions.id, txn.id));
@@ -126,6 +140,16 @@ export async function POST(request: NextRequest) {
         updatedAt: now
       })
       .where(eq(orders.id, txn.orderId));
+
+    // Log payment verification event
+    logPaymentEvent({
+      type: verificationResult.status === 'SUCCESS' ? 'PAYMENT_VERIFIED' : 'PAYMENT_FAILED',
+      orderId: txn.orderId,
+      amount: txn.amount,
+      provider: txn.provider,
+      reference,
+      userId: authenticatedUser.id,
+    });
 
     return NextResponse.json({
       success: true,
@@ -141,7 +165,10 @@ export async function POST(request: NextRequest) {
       }
     });
   } catch (error) {
-    console.error('Payment verification error:', error);
+    logError(error as Error, {
+      operation: 'payment_verification',
+      userId: authenticatedUser?.id,
+    });
     return NextResponse.json(
       {
         success: false,

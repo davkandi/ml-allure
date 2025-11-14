@@ -2,8 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { productVariants, inventoryLogs } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { requireRoles, createAuthErrorResponse } from "@/lib/auth";
 
 export async function PUT(request: NextRequest) {
+  // SECURITY FIX: Require ADMIN or INVENTORY_MANAGER role
+  const authCheck = requireRoles(request, ['ADMIN', 'INVENTORY_MANAGER', 'STAFF']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Unauthorized access to inventory',
+      authCheck.error?.includes('permissions') ? 403 : 401
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+
   try {
     const body = await request.json();
     const { variantId, quantityChange, reason, changeType } = body;
@@ -60,7 +73,7 @@ export async function PUT(request: NextRequest) {
         previousQuantity,
         newQuantity,
         reason,
-        performedBy: 1, // TODO: Get from session
+        performedBy: authenticatedUser.id, // SECURITY FIX: Use authenticated user ID
         createdAt: Date.now(),
       })
       .returning();

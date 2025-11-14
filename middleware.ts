@@ -1,24 +1,51 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { jwtVerify } from 'jose';
 
-export function middleware(request: NextRequest) {
-  const token = request.cookies.get('token')?.value || 
+// JWT Payload type definition
+interface JwtPayload {
+  id: number;
+  email: string;
+  role: 'ADMIN' | 'STAFF' | 'CUSTOMER' | 'INVENTORY_MANAGER' | 'SALES_STAFF';
+  iat: number;
+  exp: number;
+}
+
+export async function middleware(request: NextRequest) {
+  const token = request.cookies.get('token')?.value ||
                 request.headers.get('authorization')?.replace('Bearer ', '');
-  
+
   const { pathname } = request.nextUrl;
 
   // Get user info from token (if exists)
   let userRole: string | null = null;
+  let userId: number | null = null;
   let isAuthenticated = false;
 
   if (token) {
     try {
-      // Decode JWT token to get user role
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      userRole = payload.role;
-      isAuthenticated = true;
+      // SECURITY FIX: Verify JWT token signature instead of just decoding
+      const secret = new TextEncoder().encode(
+        process.env.JWT_SECRET || 'your-secret-key-change-in-production'
+      );
+
+      const { payload } = await jwtVerify(token, secret);
+
+      // Validate payload structure
+      if (
+        payload &&
+        typeof payload.id === 'number' &&
+        typeof payload.email === 'string' &&
+        typeof payload.role === 'string'
+      ) {
+        userRole = payload.role as string;
+        userId = payload.id as number;
+        isAuthenticated = true;
+      }
     } catch (error) {
-      console.error('Token parsing error:', error);
+      // Token is invalid, expired, or signature doesn't match
+      console.error('Token verification error:', error);
+      isAuthenticated = false;
     }
   }
 

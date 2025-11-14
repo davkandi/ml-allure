@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, inventoryLogs } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { requireRoles, createAuthErrorResponse } from "@/lib/auth";
 
 const VALID_STATUSES = [
   "PENDING",
@@ -27,6 +28,18 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: { orderId: string } }
 ) {
+  // SECURITY FIX: Only ADMIN and STAFF can change order status
+  const authCheck = requireRoles(request, ['ADMIN', 'STAFF', 'SALES_STAFF']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only staff can change order status',
+      403
+    );
+  }
+
+  const user = authCheck.authResult.user!;
+
   try {
     const { orderId } = params;
 
@@ -112,7 +125,7 @@ export async function PUT(
       previousQuantity: 0,
       newQuantity: 0,
       reason: `Status changed from ${currentStatus} to ${newStatus}${note ? `: ${note}` : ""}`,
-      performedBy: null as any, // TODO: Get from session
+      performedBy: user.id, // SECURITY FIX: Use authenticated user ID
       orderId: parseInt(orderId),
       createdAt: now,
     });

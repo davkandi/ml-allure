@@ -2,8 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { customers } from '@/db/schema';
 import { eq, like, and, or, desc } from 'drizzle-orm';
+import { requireAuth, requireRoles, createAuthErrorResponse, hasRole } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
+  // SECURITY FIX: Require authentication
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Authentication required to access customer data',
+      401
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+  const isStaff = hasRole(authenticatedUser, ['ADMIN', 'STAFF', 'SALES_STAFF']);
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -30,6 +44,14 @@ export async function GET(request: NextRequest) {
         );
       }
 
+      // IDOR Protection: Customers can only view their own data
+      if (!isStaff && customer[0].userId !== authenticatedUser.id) {
+        return createAuthErrorResponse(
+          'You can only view your own customer profile',
+          403
+        );
+      }
+
       return NextResponse.json(customer[0]);
     }
 
@@ -42,6 +64,11 @@ export async function GET(request: NextRequest) {
 
     let query = db.select().from(customers);
     const conditions = [];
+
+    // IDOR Protection: Customers can only list their own records
+    if (!isStaff) {
+      conditions.push(eq(customers.userId, authenticatedUser.id));
+    }
 
     // Search by email, firstName, or lastName
     if (search) {
@@ -95,6 +122,19 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // SECURITY FIX: Require authentication
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Authentication required to create customer',
+      401
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+  const isStaff = hasRole(authenticatedUser, ['ADMIN', 'STAFF', 'SALES_STAFF']);
+
   try {
     const body = await request.json();
     const { userId, email, firstName, lastName, phone, isGuest, addresses } = body;
@@ -107,6 +147,14 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+    }
+
+    // IDOR Protection: Customers can only create records for themselves
+    if (!isStaff && userId !== undefined && userId !== null && parseInt(userId) !== authenticatedUser.id) {
+      return createAuthErrorResponse(
+        'You can only create customer records for yourself',
+        403
+      );
     }
 
     // Validate isGuest if provided
@@ -166,6 +214,19 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  // SECURITY FIX: Require authentication
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Authentication required to update customer',
+      401
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+  const isStaff = hasRole(authenticatedUser, ['ADMIN', 'STAFF', 'SALES_STAFF']);
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -191,6 +252,14 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json(
         { error: 'Customer not found', code: 'CUSTOMER_NOT_FOUND' },
         { status: 404 }
+      );
+    }
+
+    // IDOR Protection: Customers can only update their own records
+    if (!isStaff && existingCustomer[0].userId !== authenticatedUser.id) {
+      return createAuthErrorResponse(
+        'You can only update your own customer profile',
+        403
       );
     }
 
@@ -276,6 +345,16 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  // SECURITY FIX: Only ADMIN can delete customer records
+  const authCheck = requireRoles(request, ['ADMIN']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only administrators can delete customer records',
+      403
+    );
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

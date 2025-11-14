@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { orders, customers } from '@/db/schema';
 import { eq, like, and, or, desc, gte, lte } from 'drizzle-orm';
+import { requireAuth, requireRoles, createAuthErrorResponse } from '@/lib/auth';
 
 const ORDER_NUMBER_REGEX = /^MLA-\d{8}-\d{4}$/;
 
@@ -28,6 +29,18 @@ function validateDeliveryAddress(address: any): boolean {
 }
 
 export async function GET(request: NextRequest) {
+  // SECURITY FIX: Require authentication to view orders
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.authResult.error || 'Authentication required to view orders',
+      401
+    );
+  }
+
+  const user = authCheck.authResult.user!;
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const id = searchParams.get('id');
@@ -35,12 +48,12 @@ export async function GET(request: NextRequest) {
 
     if (id || orderNumber) {
       let whereCondition;
-      
+
       if (id) {
         if (isNaN(parseInt(id))) {
-          return NextResponse.json({ 
+          return NextResponse.json({
             error: "Valid ID is required",
-            code: "INVALID_ID" 
+            code: "INVALID_ID"
           }, { status: 400 });
         }
         whereCondition = eq(orders.id, parseInt(id));
@@ -54,10 +67,18 @@ export async function GET(request: NextRequest) {
         .limit(1);
 
       if (order.length === 0) {
-        return NextResponse.json({ 
+        return NextResponse.json({
           error: 'Order not found',
-          code: 'ORDER_NOT_FOUND' 
+          code: 'ORDER_NOT_FOUND'
         }, { status: 404 });
+      }
+
+      // IDOR Protection: Customers can only view their own orders
+      if (user.role === 'CUSTOMER' && order[0].customerId !== user.id) {
+        return createAuthErrorResponse(
+          'You can only view your own orders',
+          403
+        );
       }
 
       return NextResponse.json(order[0]);
@@ -75,6 +96,12 @@ export async function GET(request: NextRequest) {
 
     let query = db.select().from(orders);
     const conditions = [];
+
+    // IDOR Protection: Customers can only list their own orders
+    if (user.role === 'CUSTOMER') {
+      conditions.push(eq(orders.customerId, user.id));
+    }
+    // Admin, Staff, Sales Staff can view all orders (no additional filter)
 
     if (search) {
       conditions.push(like(orders.orderNumber, `%${search}%`));
@@ -138,6 +165,18 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // SECURITY FIX: Require authentication to create orders
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.authResult.error || 'Authentication required to create orders',
+      401
+    );
+  }
+
+  const user = authCheck.authResult.user!;
+
   try {
     const body = await request.json();
     const {
@@ -159,25 +198,34 @@ export async function POST(request: NextRequest) {
     } = body;
 
     if (!orderNumber) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: "Order number is required",
-        code: "MISSING_ORDER_NUMBER" 
+        code: "MISSING_ORDER_NUMBER"
       }, { status: 400 });
     }
 
     if (!validateOrderNumber(orderNumber)) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: "Order number must match format 'MLA-YYYYMMDD-XXXX'",
-        code: "INVALID_ORDER_NUMBER_FORMAT" 
+        code: "INVALID_ORDER_NUMBER_FORMAT"
       }, { status: 400 });
     }
 
     if (!customerId) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: "Customer ID is required",
-        code: "MISSING_CUSTOMER_ID" 
+        code: "MISSING_CUSTOMER_ID"
       }, { status: 400 });
     }
+
+    // IDOR Protection: Customers can only create orders for themselves
+    if (user.role === 'CUSTOMER' && customerId !== user.id) {
+      return createAuthErrorResponse(
+        'You can only create orders for yourself',
+        403
+      );
+    }
+    // Admin, Staff, Sales Staff can create orders for any customer
 
     if (!status) {
       return NextResponse.json({ 

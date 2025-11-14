@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
 
 const VALID_PAYMENT_STATUSES = ["PENDING", "PAID", "FAILED", "REFUNDED"];
 
@@ -9,6 +10,18 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: { orderId: string } }
 ) {
+  // SECURITY FIX: Require authentication to update payment status
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.authResult.error || 'Authentication required to update payment',
+      401
+    );
+  }
+
+  const user = authCheck.authResult.user!;
+
   try {
     const { orderId } = params;
 
@@ -57,6 +70,15 @@ export async function PUT(
     }
 
     const order = existingOrder[0];
+
+    // IDOR Protection: Customers can only update their own order payments
+    if (user.role === 'CUSTOMER' && order.customerId !== user.id) {
+      return createAuthErrorResponse(
+        'You can only update payments for your own orders',
+        403
+      );
+    }
+    // Admin, Staff, Sales Staff can update any order's payment
     const now = Date.now();
 
     // Update order payment status and reference
@@ -97,7 +119,7 @@ export async function PUT(
           status: transactionStatus,
           reference: reference || existingTransactions[0].reference,
           verifiedAt: paymentStatus === "PAID" ? now : null,
-          verifiedBy: null as any, // TODO: Get from session
+          verifiedBy: paymentStatus === "PAID" ? user.id : null, // SECURITY FIX: Use authenticated user ID
           updatedAt: now,
         })
         .where(eq(transactions.id, existingTransactions[0].id));
@@ -110,7 +132,7 @@ export async function PUT(
         provider: order.paymentMethod === "MOBILE_MONEY" ? "M-Pesa" : null,
         reference: reference || null,
         status: transactionStatus,
-        verifiedBy: null,
+        verifiedBy: paymentStatus === "PAID" ? user.id : null, // SECURITY FIX: Use authenticated user ID
         verifiedAt: paymentStatus === "PAID" ? now : null,
         createdAt: now,
         updatedAt: now,

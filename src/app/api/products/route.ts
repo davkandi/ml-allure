@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { products, categories, productVariants } from '@/db/schema';
 import { eq, like, and, or, desc, asc, gte, lte, sql } from 'drizzle-orm';
+import { requireRoles, createAuthErrorResponse } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
   try {
@@ -163,16 +164,26 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // SECURITY FIX: Only ADMIN can create products
+  const authCheck = requireRoles(request, ['ADMIN']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only administrators can create products',
+      403
+    );
+  }
+
   try {
     const body = await request.json();
-    const { 
-      name, 
-      slug, 
-      description, 
-      categoryId, 
-      basePrice, 
-      currency, 
-      images, 
+    const {
+      name,
+      slug,
+      description,
+      categoryId,
+      basePrice,
+      currency,
+      images,
       isActive, 
       isFeatured, 
       tags,
@@ -342,12 +353,22 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  // SECURITY FIX: Only ADMIN can update products
+  const authCheck = requireRoles(request, ['ADMIN']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only administrators can update products',
+      403
+    );
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
     if (!id || isNaN(parseInt(id))) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: "Valid ID is required",
         code: "INVALID_ID" 
       }, { status: 400 });
@@ -541,6 +562,16 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  // SECURITY FIX: Only ADMIN can delete products
+  const authCheck = requireRoles(request, ['ADMIN']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only administrators can delete products',
+      403
+    );
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
