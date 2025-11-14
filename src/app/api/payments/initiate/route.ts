@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { requireAuth, createAuthErrorResponse } from '@/lib/auth';
 
 /**
  * Mobile Money Service Functions (Mock Implementation)
@@ -83,6 +84,18 @@ function getProviderInstructions(provider: string, amount: number, reference: st
  * Initiate a mobile money payment
  */
 export async function POST(request: NextRequest) {
+  // SECURITY FIX: Require authentication
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Authentication required to initiate payment',
+      401
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+
   try {
     const body = await request.json();
     const { orderId, phoneNumber, provider } = body;
@@ -137,6 +150,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'Order not found', code: 'ORDER_NOT_FOUND' },
         { status: 404 }
+      );
+    }
+
+    // IDOR Protection: Customers can only initiate payment for their own orders
+    if (authenticatedUser.role === 'CUSTOMER' && order[0].customerId !== authenticatedUser.id) {
+      return createAuthErrorResponse(
+        'You can only initiate payment for your own orders',
+        403
       );
     }
 

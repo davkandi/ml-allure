@@ -3,6 +3,7 @@ import { db } from '@/db';
 import { users } from '@/db/schema';
 import { eq, like, and, or, desc } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
+import { requireAuth, requireRoles, createAuthErrorResponse, hasRole } from '@/lib/auth';
 
 const VALID_ROLES = ['ADMIN', 'INVENTORY_MANAGER', 'SALES_STAFF', 'CUSTOMER'];
 
@@ -13,6 +14,19 @@ function excludePassword(user: any) {
 }
 
 export async function GET(request: NextRequest) {
+  // SECURITY FIX: Require authentication
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Authentication required to access user data',
+      401
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+  const isAdmin = hasRole(authenticatedUser, ['ADMIN']);
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -39,10 +53,26 @@ export async function GET(request: NextRequest) {
         );
       }
 
+      // IDOR Protection: Users can only view their own profile
+      if (!isAdmin && user[0].id !== authenticatedUser.id) {
+        return createAuthErrorResponse(
+          'You can only view your own profile',
+          403
+        );
+      }
+
       return NextResponse.json(excludePassword(user[0]));
     }
 
     // List users with pagination, search, and filters
+    // IDOR Protection: Only ADMIN can list users
+    if (!isAdmin) {
+      return createAuthErrorResponse(
+        'Only administrators can list users',
+        403
+      );
+    }
+
     const limit = Math.min(parseInt(searchParams.get('limit') ?? '10'), 100);
     const offset = parseInt(searchParams.get('offset') ?? '0');
     const search = searchParams.get('search');
@@ -105,6 +135,16 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // SECURITY FIX: Only ADMIN can create users
+  const authCheck = requireRoles(request, ['ADMIN']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only administrators can create users',
+      403
+    );
+  }
+
   try {
     const body = await request.json();
     const { email, password, role, firstName, lastName, phone, isActive } = body;
@@ -201,6 +241,19 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  // SECURITY FIX: Require authentication
+  const authCheck = requireAuth(request);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Authentication required to update user',
+      401
+    );
+  }
+
+  const authenticatedUser = authCheck.authResult.user!;
+  const isAdmin = hasRole(authenticatedUser, ['ADMIN']);
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -226,8 +279,24 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    // IDOR Protection: Users can only update their own profile
+    if (!isAdmin && existingUser[0].id !== authenticatedUser.id) {
+      return createAuthErrorResponse(
+        'You can only update your own profile',
+        403
+      );
+    }
+
     const body = await request.json();
     const { email, password, role, firstName, lastName, phone, isActive } = body;
+
+    // SECURITY: Non-admin users cannot change their role or isActive status
+    if (!isAdmin && (role !== undefined || isActive !== undefined)) {
+      return createAuthErrorResponse(
+        'Only administrators can change user roles or activation status',
+        403
+      );
+    }
 
     // Prepare update data
     const updateData: any = {
@@ -318,6 +387,16 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  // SECURITY FIX: Only ADMIN can delete users
+  const authCheck = requireRoles(request, ['ADMIN']);
+
+  if (!authCheck.success) {
+    return createAuthErrorResponse(
+      authCheck.error || 'Only administrators can delete users',
+      403
+    );
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
